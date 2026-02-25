@@ -1,0 +1,83 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-surface-1 text-text-primary font-sans;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #333355;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #444466;
+  }
+
+  ::selection {
+    background: rgba(67, 97, 238, 0.3);
+    color: #f2f2f7;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-surface-2 border border-border rounded-md;
+  }
+
+  .panel-header {
+    @apply px-3 py-2 border-b border-border text-xs font-medium text-text-secondary uppercase tracking-wider;
+  }
+
+  .row-hover {
+    @apply transition-colors duration-75 hover:bg-surface-3/50;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono font-medium;
+  }
+
+  .tab-trigger {
+    @apply px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors
+           hover:text-text-primary border-b-2 border-transparent;
+  }
+
+  .tab-trigger[data-active='true'] {
+    @apply text-text-primary border-accent-blue;
+  }
+
+  .glow-line {
+    background: linear-gradient(90deg, transparent, rgba(67, 97, 238, 0.15), transparent);
+    height: 1px;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

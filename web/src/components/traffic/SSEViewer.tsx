@@ -66,10 +66,42 @@ function EventCard({ event, index }: { event: SSEEvent; index: number }) {
 
 function aggregateSSEContent(events: SSEEvent[]): string {
   const parts: string[] = [];
+  let doneText = '';
   
   for (const event of events) {
     try {
       const data = JSON.parse(event.data);
+
+      if (event.event_type === 'response.output_text.delta' && typeof data.delta === 'string') {
+        parts.push(data.delta);
+        continue;
+      }
+
+      if (event.event_type === 'response.output_text.done' && typeof data.text === 'string') {
+        doneText = data.text;
+        continue;
+      }
+
+      if (data.response?.output && Array.isArray(data.response.output)) {
+        const chunks: string[] = [];
+        data.response.output.forEach((outputItem: unknown) => {
+          if (!outputItem || typeof outputItem !== 'object') return;
+          const item = outputItem as { content?: unknown[] };
+          if (!Array.isArray(item.content)) return;
+          item.content.forEach((part: unknown) => {
+            if (!part || typeof part !== 'object') return;
+            const text = (part as { text?: unknown }).text;
+            if (typeof text === 'string') {
+              chunks.push(text);
+            }
+          });
+        });
+
+        if (chunks.length > 0) {
+          doneText = chunks.join('');
+          continue;
+        }
+      }
       
       // Anthropic: content_block_delta with text delta
       if (event.event_type === 'content_block_delta' && data.delta?.text) {
@@ -94,7 +126,7 @@ function aggregateSSEContent(events: SSEEvent[]): string {
     }
   }
   
-  return parts.join('');
+  return doneText || parts.join('');
 }
 
 export function SSEViewer({ events, isLive = false, mode = 'timeline' }: SSEViewerProps) {

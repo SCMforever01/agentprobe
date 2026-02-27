@@ -7,6 +7,7 @@ import {
   Network,
   Layers,
   FileCode,
+  WandSparkles,
   MoreHorizontal,
 } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
@@ -58,6 +59,8 @@ export function Sidebar() {
   const filters = useTrafficStore((s) => s.filters);
   const setFilter = useTrafficStore((s) => s.setFilter);
   const stats = useTrafficStore((s) => s.stats);
+  const currentView = useTrafficStore((s) => s.currentView);
+  const openStandaloneParsePage = useTrafficStore((s) => s.openStandaloneParsePage);
 
   const agentCounts = stats.requests_by_agent;
   const protocolCounts = stats.requests_by_protocol;
@@ -119,6 +122,21 @@ export function Sidebar() {
       </div>
 
       <div className="flex-1" />
+
+      <div className="px-3 pt-3 pb-1 border-t border-border/70">
+        <h3 className="text-2xs font-semibold uppercase tracking-widest text-text-tertiary">
+          Tools
+        </h3>
+      </div>
+      <div className="px-1.5 pb-2">
+        <SidebarItem
+          label="Parser"
+          icon={<WandSparkles className="w-3.5 h-3.5" />}
+          count={0}
+          active={currentView === 'parse'}
+          onClick={openStandaloneParsePage}
+        />
+      </div>
 
       <div className="p-3 border-t border-border">
         <div className="text-2xs text-text-tertiary text-center">

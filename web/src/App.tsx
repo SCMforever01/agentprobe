@@ -12,12 +12,8 @@ export default function App() {
   const selectedRequestId = useTrafficStore((s) => s.selectedRequestId);
   const currentView = useTrafficStore((s) => s.currentView);
 
-  if (currentView === 'parse') {
-    return <ParsePage />;
-  }
-
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-surface-1">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-surface-1 relative">
       <Toolbar />
       <div className="flex-1 flex min-h-0">
         <Sidebar />
@@ -31,6 +27,12 @@ export default function App() {
         </div>
       </div>
       <StatusBar />
+
+      {currentView === 'parse' && (
+        <div className="absolute inset-0 z-20 bg-surface-1">
+          <ParsePage />
+        </div>
+      )}
     </div>
   );
 }

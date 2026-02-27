@@ -14,8 +14,10 @@ interface TrafficState {
 
   // 新增：当前视图模式（traffic/parse）
   currentView: 'traffic' | 'parse';
+  previousView: 'traffic' | 'parse';
   // 新增：解析上下文（请求ID + 解析目标），为空表示未处于解析视图
   parseContext: { requestId: string; target: 'request' | 'response' } | null;
+  parseDraft: string;
 
   addRequest: (req: RequestSummary) => void;
   updateRequest: (req: RequestSummary) => void;
@@ -27,7 +29,9 @@ interface TrafficState {
   updateStats: (stats: TrafficStats) => void;
   setRequests: (requests: RequestSummary[]) => void;
   openParsePage: (requestId: string, target: 'request' | 'response') => void;
+  openStandaloneParsePage: () => void;
   closeParsePage: () => void;
+  setParseDraft: (draft: string) => void;
 }
 
 export const useTrafficStore = create<TrafficState>((set, get) => ({
@@ -51,7 +55,9 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
 
   // initial view
   currentView: 'traffic',
+  previousView: 'traffic',
   parseContext: null,
+  parseDraft: '',
 
   addRequest: (req) => {
     set((state) => ({
@@ -137,11 +143,18 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   },
 
   openParsePage: (requestId, target) => {
-    set({ currentView: 'parse', parseContext: { requestId, target } });
+    const previousView = get().currentView;
+    set({ previousView, currentView: 'parse', parseContext: { requestId, target } });
+  },
+  openStandaloneParsePage: () => {
+    const previousView = get().currentView;
+    set({ previousView, currentView: 'parse', parseContext: null });
   },
   closeParsePage: () => {
-    set({ currentView: 'traffic', parseContext: null });
+    const previousView = get().previousView;
+    set({ currentView: previousView === 'parse' ? 'traffic' : previousView, parseContext: null });
   },
+  setParseDraft: (draft) => set({ parseDraft: draft }),
 }));
 
 export function useFilteredRequests(): RequestSummary[] {

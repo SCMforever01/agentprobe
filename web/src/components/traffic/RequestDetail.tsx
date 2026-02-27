@@ -19,6 +19,104 @@ import type { SSEEvent } from '../../types';
 type ReqTab = 'headers' | 'body' | 'query';
 type ResTab = 'headers' | 'body' | 'sse-timing' | 'sse-data' | 'timing';
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseSSEEventsFromBody(body: string | null, requestId: string): SSEEvent[] {
+  if (!body || !body.trim()) {
+    return [];
+  }
+
+  const now = new Date().toISOString();
+  const sseEvents: SSEEvent[] = [];
+  const lines = body.split('\n');
+  let started = false;
+  let currentEventType = '';
+  let currentDataLines: string[] = [];
+
+  const flush = () => {
+    if (!currentEventType && currentDataLines.length === 0) {
+      return;
+    }
+
+    const data = currentDataLines.join('\n');
+    sseEvents.push({
+      id: `body-sse-${requestId}-${sseEvents.length}`,
+      request_id: requestId,
+      event_index: sseEvents.length,
+      event_type: currentEventType || 'message',
+      data,
+      timestamp: now,
+    });
+
+    currentEventType = '';
+    currentDataLines = [];
+  };
+
+  for (const originalLine of lines) {
+    const line = originalLine.trimEnd();
+
+    if (!started && (line.startsWith('event:') || line.startsWith('data:'))) {
+      started = true;
+    }
+
+    if (!started) {
+      continue;
+    }
+
+    if (line.trim() === '') {
+      flush();
+      continue;
+    }
+
+    if (line.startsWith('event:')) {
+      currentEventType = line.slice('event:'.length).trim();
+      continue;
+    }
+
+    if (line.startsWith('data:')) {
+      currentDataLines.push(line.slice('data:'.length).trim());
+    }
+  }
+
+  flush();
+  if (sseEvents.length > 0) {
+    return sseEvents;
+  }
+
+  const jsonlEvents: SSEEvent[] = [];
+  body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line, index) => {
+      let eventType = 'json_line';
+
+      try {
+        const parsed = JSON.parse(line);
+        if (isObject(parsed) && typeof parsed.type === 'string') {
+          eventType = parsed.type;
+        } else if (isObject(parsed) && isObject(parsed.response) && typeof parsed.response.object === 'string') {
+          eventType = parsed.response.object;
+        }
+      } catch {
+        eventType = 'raw_line';
+      }
+
+      jsonlEvents.push({
+        id: `body-jsonl-${requestId}-${index}`,
+        request_id: requestId,
+        event_index: index,
+        event_type: eventType,
+        data: line,
+        timestamp: now,
+      });
+    });
+
+  return jsonlEvents;
+}
+
 function parseQueryParams(url: string): Record<string, string> {
   try {
     const parsed = new URL(url, 'http://localhost');
@@ -123,16 +221,25 @@ export function RequestDetail() {
 
   useEffect(() => {
     if (!selectedRequest) return;
-    setReqTab('headers');
-    setResTab('body');
-    setSseEvents([]);
+    queueMicrotask(() => {
+      setReqTab('headers');
+      setResTab('body');
+      setSseEvents([]);
+    });
 
     if (selectedRequest.is_streaming && selectedRequest.id) {
       fetchSSEEvents(selectedRequest.id)
-        .then(setSseEvents)
-        .catch(() => setSseEvents([]));
+        .then((events) => {
+          if (events.length > 0) {
+            setSseEvents(events);
+            return;
+          }
+
+          setSseEvents(parseSSEEventsFromBody(selectedRequest.response_body, selectedRequest.id));
+        })
+        .catch(() => setSseEvents(parseSSEEventsFromBody(selectedRequest.response_body, selectedRequest.id)));
     }
-  }, [selectedRequest?.id]);
+  }, [selectedRequest]);
 
   if (!selectedRequest && !isLoadingDetail) {
     return (

@@ -6,7 +6,7 @@ import type { CapturedRequest } from '../../types';
 
 type JsonObject = Record<string, unknown>;
 
-type ParseSectionTab = 'aggregate' | 'role' | 'tools' | 'mcp' | 'skills';
+type ParseSectionTab = 'aggregate' | 'role' | 'tools' | 'mcp' | 'skills' | 'usage';
 
 interface RoleEntry {
   source: string;
@@ -30,6 +30,12 @@ interface MCPEntry {
 interface SkillEntry {
   source: string;
   name: string;
+}
+
+interface UsageEntry {
+  source: string;
+  metrics: Array<{ key: string; value: number }>;
+  raw: unknown;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -244,6 +250,60 @@ function extractSkillEntries(payload: JsonObject): SkillEntry[] {
   return entries;
 }
 
+function extractUsageMetrics(value: unknown, prefix = ''): Array<{ key: string; value: number }> {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return [{ key: prefix || 'value', value }];
+  }
+
+  if (!isObject(value)) {
+    return [];
+  }
+
+  const metrics: Array<{ key: string; value: number }> = [];
+  Object.entries(value).forEach(([key, nested]) => {
+    const nestedPrefix = prefix ? `${prefix}.${key}` : key;
+    metrics.push(...extractUsageMetrics(nested, nestedPrefix));
+  });
+
+  return metrics;
+}
+
+function extractUsageEntries(payload: JsonObject): UsageEntry[] {
+  const entries: UsageEntry[] = [];
+  const seen = new Set<string>();
+
+  const addUsage = (source: string, usageValue: unknown) => {
+    const metrics = extractUsageMetrics(usageValue);
+    const key = `${source}:${metrics.map((metric) => `${metric.key}=${metric.value}`).join('|')}`;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    entries.push({
+      source,
+      metrics,
+      raw: usageValue,
+    });
+  };
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'usage')) {
+    addUsage('root.usage', payload.usage);
+  }
+
+  if (isObject(payload.response) && Object.prototype.hasOwnProperty.call(payload.response, 'usage')) {
+    addUsage('root.response.usage', payload.response.usage);
+  }
+
+  collectMessageLikeContainers(payload).forEach(({ source, node }) => {
+    if (Object.prototype.hasOwnProperty.call(node, 'usage')) {
+      addUsage(`${source}.usage`, node.usage);
+    }
+  });
+
+  return entries;
+}
+
 function JsonBlock({ value }: { value: unknown }) {
   const text = useMemo(() => {
     if (typeof value === 'string') {
@@ -333,6 +393,7 @@ function ULWStructuredView({ data, target }: { data: string; target: ParseTarget
   const toolEntries = useMemo(() => (parsed ? extractToolEntries(parsed) : []), [parsed]);
   const mcpEntries = useMemo(() => (parsed ? extractMCPEntries(parsed) : []), [parsed]);
   const skillEntries = useMemo(() => (parsed ? extractSkillEntries(parsed) : []), [parsed]);
+  const usageEntries = useMemo(() => (parsed ? extractUsageEntries(parsed) : []), [parsed]);
 
   if (!parsed) {
     return (
@@ -353,6 +414,7 @@ function ULWStructuredView({ data, target }: { data: string; target: ParseTarget
     { key: 'tools', label: `Tools (${toolEntries.length})` },
     { key: 'mcp', label: `MCP (${mcpEntries.length})` },
     { key: 'skills', label: `Skills (${skillEntries.length})` },
+    { key: 'usage', label: `Usage (${usageEntries.length})` },
   ];
 
   return (
@@ -361,7 +423,7 @@ function ULWStructuredView({ data, target }: { data: string; target: ParseTarget
         <div className="panel-header flex items-center justify-between">
           <span>ULW Structured {target === 'request' ? 'Request' : 'Response'}</span>
           <span className="text-2xs font-mono text-text-tertiary normal-case">
-            role:{roleEntries.length} · tools:{toolEntries.length} · mcp:{mcpEntries.length} · skills:{skillEntries.length}
+            role:{roleEntries.length} · tools:{toolEntries.length} · mcp:{mcpEntries.length} · skills:{skillEntries.length} · usage:{usageEntries.length}
           </span>
         </div>
 
@@ -446,6 +508,28 @@ function ULWStructuredView({ data, target }: { data: string; target: ParseTarget
                     name: entry.name,
                     source: entry.source,
                   }}
+                />
+              ))}
+            </div>
+          )}
+
+          {section === 'usage' && (
+            <div className="space-y-3">
+              {usageEntries.length === 0 && <div className="text-xs text-text-tertiary">No usage info detected.</div>}
+              {usageEntries.map((entry, index) => (
+                <CollapsibleDataCard
+                  key={`${entry.source}-${index}`}
+                  header={<span className="badge bg-accent-success/15 text-accent-success">usage</span>}
+                  source={entry.source}
+                  preview={
+                    entry.metrics.length > 0
+                      ? entry.metrics
+                          .slice(0, 4)
+                          .map((metric) => `${metric.key}: ${metric.value}`)
+                          .join(' · ')
+                      : toPreviewText(entry.raw)
+                  }
+                  value={entry.raw}
                 />
               ))}
             </div>
@@ -541,6 +625,34 @@ function aggregateSSEResponseText(events: ParsedSSEEvent[]): string {
   }
 
   return rawSegments.join('\n');
+}
+
+function aggregateSSEUsage(events: ParsedSSEEvent[]): JsonObject | null {
+  const merged: JsonObject = {};
+
+  const mergeUsage = (usage: unknown) => {
+    const metrics = extractUsageMetrics(usage);
+    metrics.forEach((metric) => {
+      merged[metric.key] = metric.value;
+    });
+  };
+
+  events.forEach((event) => {
+    const payload = event.parsedData;
+    if (!isObject(payload)) {
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, 'usage')) {
+      mergeUsage(payload.usage);
+    }
+
+    if (isObject(payload.response) && Object.prototype.hasOwnProperty.call(payload.response, 'usage')) {
+      mergeUsage(payload.response.usage);
+    }
+  });
+
+  return Object.keys(merged).length > 0 ? merged : null;
 }
 
 function parseJsonLines(rawText: string): ParsedSSEEvent[] {
@@ -709,6 +821,7 @@ export function ParsePage() {
   const [sseEvents, setSseEvents] = useState<ParsedSSEEvent[]>([]);
 
   const aggregatedSSEText = useMemo(() => aggregateSSEResponseText(sseEvents), [sseEvents]);
+  const aggregatedSSEUsage = useMemo(() => aggregateSSEUsage(sseEvents), [sseEvents]);
 
   useEffect(() => {
     if (!parseContext) {
@@ -886,10 +999,17 @@ export function ParsePage() {
               <ULWStructuredView data={parsedText} target={activeTarget} />
             ) : (
               <div className="p-4">
-                <div className="panel">
+                <div className="panel mb-4">
                   <div className="panel-header">SSE Aggregated Data</div>
                   <div className="p-4">
                     <JsonBlock value={aggregatedSSEText || sseEvents.map((event) => event.parsedData)} />
+                  </div>
+                </div>
+
+                <div className="panel">
+                  <div className="panel-header">SSE Usage</div>
+                  <div className="p-4">
+                    <JsonBlock value={aggregatedSSEUsage ?? 'No usage info detected from SSE events'} />
                   </div>
                 </div>
               </div>

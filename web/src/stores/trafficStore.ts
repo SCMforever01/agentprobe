@@ -11,6 +11,8 @@ interface TrafficState {
   isCapturing: boolean;
   stats: TrafficStats;
   wsConnected: boolean;
+  unknownHostsExpanded: boolean;
+  selectedUnknownHost: string | null;
 
   // 新增：当前视图模式（traffic/parse）
   currentView: 'traffic' | 'parse';
@@ -28,6 +30,8 @@ interface TrafficState {
   setWsConnected: (connected: boolean) => void;
   updateStats: (stats: TrafficStats) => void;
   setRequests: (requests: RequestSummary[]) => void;
+  setUnknownHostsExpanded: (expanded: boolean) => void;
+  setSelectedUnknownHost: (host: string | null) => void;
   openParsePage: (requestId: string, target: 'request' | 'response') => void;
   openStandaloneParsePage: () => void;
   closeParsePage: () => void;
@@ -42,6 +46,7 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   filters: {
     agentType: null,
     protocolType: null,
+    host: null,
     search: '',
   },
   isCapturing: true,
@@ -52,6 +57,8 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
     requests_by_protocol: {},
   },
   wsConnected: false,
+  unknownHostsExpanded: false,
+  selectedUnknownHost: null,
 
   // initial view
   currentView: 'traffic',
@@ -142,6 +149,14 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
     set({ requests });
   },
 
+  setUnknownHostsExpanded: (expanded) => {
+    set({ unknownHostsExpanded: expanded });
+  },
+
+  setSelectedUnknownHost: (host) => {
+    set({ selectedUnknownHost: host });
+  },
+
   openParsePage: (requestId, target) => {
     const previousView = get().currentView;
     set({ previousView, currentView: 'parse', parseContext: { requestId, target } });
@@ -163,6 +178,7 @@ export function useFilteredRequests(): RequestSummary[] {
   return requests.filter((req) => {
     if (filters.agentType && req.agent_type !== filters.agentType) return false;
     if (filters.protocolType && req.protocol_type !== filters.protocolType) return false;
+    if (filters.host && req.host !== filters.host) return false;
     if (filters.search) {
       const q = filters.search.toLowerCase();
       return (

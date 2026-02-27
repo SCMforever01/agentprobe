@@ -50,6 +50,7 @@ export type ProtocolType = 'llm_api' | 'mcp' | 'other';
 export interface Filters {
   agentType: string | null;
   protocolType: string | null;
+  host: string | null;
   search: string;
 }
 

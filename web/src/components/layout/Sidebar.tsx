@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
 import { cn, getAgentColor } from '../../utils/helpers';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 interface SidebarItemProps {
   label: string;
@@ -56,9 +56,14 @@ function SidebarItem({ label, icon, count, active, color, onClick }: SidebarItem
 }
 
 export function Sidebar() {
+  const requests = useTrafficStore((s) => s.requests);
   const filters = useTrafficStore((s) => s.filters);
   const setFilter = useTrafficStore((s) => s.setFilter);
   const stats = useTrafficStore((s) => s.stats);
+  const unknownHostsExpanded = useTrafficStore((s) => s.unknownHostsExpanded);
+  const setUnknownHostsExpanded = useTrafficStore((s) => s.setUnknownHostsExpanded);
+  const selectedUnknownHost = useTrafficStore((s) => s.selectedUnknownHost);
+  const setSelectedUnknownHost = useTrafficStore((s) => s.setSelectedUnknownHost);
   const currentView = useTrafficStore((s) => s.currentView);
   const openStandaloneParsePage = useTrafficStore((s) => s.openStandaloneParsePage);
 
@@ -82,6 +87,42 @@ export function Sidebar() {
     { key: 'other', label: 'Other', icon: <Globe className="w-3.5 h-3.5" /> },
   ];
 
+  const unknownHosts = useMemo(
+    () =>
+      Object.entries(
+        requests
+          .filter((req) => req.agent_type === 'unknown')
+          .reduce<Record<string, number>>((acc, req) => {
+            acc[req.host] = (acc[req.host] || 0) + 1;
+            return acc;
+          }, {})
+      )
+        .sort((a, b) => b[1] - a[1])
+        .map(([host, count]) => ({ host, count })),
+    [requests]
+  );
+
+  const handleAgentClick = (agentKey: string | null) => {
+    if (agentKey === 'unknown') {
+      const shouldCollapse = filters.agentType === 'unknown' && unknownHostsExpanded;
+      if (shouldCollapse) {
+        setUnknownHostsExpanded(false);
+        setSelectedUnknownHost(null);
+        setFilter({ agentType: null, host: null });
+        return;
+      }
+
+      setUnknownHostsExpanded(true);
+      setSelectedUnknownHost(null);
+      setFilter({ agentType: 'unknown', host: null });
+      return;
+    }
+
+    setUnknownHostsExpanded(false);
+    setSelectedUnknownHost(null);
+    setFilter({ agentType: agentKey, host: null });
+  };
+
   return (
     <div className="w-[220px] shrink-0 bg-surface-0 border-r border-border flex flex-col overflow-hidden select-none">
       <div className="px-3 pt-3 pb-1">
@@ -91,15 +132,38 @@ export function Sidebar() {
       </div>
       <div className="px-1.5 space-y-0.5">
         {agents.map((agent) => (
-          <SidebarItem
-            key={agent.label}
-            label={agent.label}
-            icon={agent.icon}
-            count={agent.key ? (agentCounts[agent.key] || 0) : stats.total_requests}
-            color={agent.color}
-            active={filters.agentType === agent.key}
-            onClick={() => setFilter({ agentType: agent.key })}
-          />
+          <div key={agent.label} className="space-y-0.5">
+            <SidebarItem
+              label={agent.label}
+              icon={agent.icon}
+              count={agent.key ? (agentCounts[agent.key] || 0) : stats.total_requests}
+              color={agent.color}
+              active={filters.agentType === agent.key}
+              onClick={() => handleAgentClick(agent.key)}
+            />
+            {agent.key === 'unknown' && unknownHostsExpanded && (
+              <div className="ml-5 space-y-0.5">
+                {unknownHosts.map((entry) => (
+                  <button
+                    key={entry.host}
+                    onClick={() => {
+                      setSelectedUnknownHost(entry.host);
+                      setFilter({ agentType: 'unknown', host: entry.host });
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-2 py-1 rounded text-2xs font-mono transition-colors',
+                      selectedUnknownHost === entry.host
+                        ? 'bg-accent-purple/12 text-text-primary'
+                        : 'text-text-tertiary hover:text-text-primary hover:bg-surface-3/40'
+                    )}
+                  >
+                    <span className="truncate flex-1 text-left">{entry.host}</span>
+                    <span className="text-2xs text-text-tertiary">{entry.count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         ))}
       </div>
 

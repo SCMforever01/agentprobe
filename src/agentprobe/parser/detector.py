@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 import re
 
 _AGENT_PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "claude_code": [
         re.compile(r"claude[-_]?code", re.IGNORECASE),
+        re.compile(r"claude[-_]?cli", re.IGNORECASE),
         re.compile(r"anthropic[-_]?cli", re.IGNORECASE),
     ],
     "opencode": [
@@ -35,40 +34,45 @@ _OPENAI_CHAT_PATH_RE = re.compile(r"^/v1/chat/completions")
 _OPENAI_RESPONSES_PATH_RE = re.compile(r"^/v1/responses")
 _GOOGLE_PATH_RE = re.compile(r"^/v1beta/models/.+:(generateContent|streamGenerateContent)")
 _MCP_METHODS = {
-    "initialize", "initialized", "shutdown",
-    "tools/list", "tools/call",
-    "resources/list", "resources/read",
-    "prompts/list", "prompts/get",
+    "initialize",
+    "initialized",
+    "shutdown",
+    "tools/list",
+    "tools/call",
+    "resources/list",
+    "resources/read",
+    "prompts/list",
+    "prompts/get",
     "notifications/initialized",
     "notifications/cancelled",
     "completion/complete",
 }
 
 
-def detect_agent(headers: dict, user_agent: str | None = None) -> str:
-    ua = user_agent or ""
-    if not ua:
-        for key in ("user-agent", "User-Agent", "USER-AGENT"):
-            val = headers.get(key)
-            if val:
-                ua = val
-                break
+def detect_agent(headers: dict | None, user_agent: str | None = None) -> str:
+    normalized_headers = (
+        {str(key).lower(): str(value) for key, value in headers.items()}
+        if isinstance(headers, dict)
+        else {}
+    )
 
-    x_client = ""
-    for key in ("x-client-name", "X-Client-Name", "X-CLIENT-NAME"):
-        val = headers.get(key)
-        if val:
-            x_client = val
-            break
+    ua = str(user_agent) if user_agent else normalized_headers.get("user-agent", "")
+    x_client = normalized_headers.get("x-client-name", "")
+    x_app = normalized_headers.get("x-app", "")
 
-    combined = f"{ua} {x_client}"
+    combined = f"{ua} {x_client} {x_app}"
     for agent_name, patterns in _AGENT_PATTERNS.items():
         for pattern in patterns:
             if pattern.search(combined):
                 return agent_name
 
-    if "anthropic-version" in headers or "x-api-key" in headers:
-        if any(p.search(ua) for p in _AGENT_PATTERNS["claude_code"]):
+    has_anthropic_headers = (
+        "anthropic-version" in normalized_headers or "anthropic-beta" in normalized_headers
+    )
+    if has_anthropic_headers:
+        if any(p.search(combined) for p in _AGENT_PATTERNS["claude_code"]):
+            return "claude_code"
+        if x_app.lower() in {"cli", "claude-code"}:
             return "claude_code"
 
     return "unknown"
@@ -88,7 +92,11 @@ def detect_protocol(
             return ("anthropic", "anthropic")
         return ("anthropic", _guess_provider(host_lower))
 
-    if host_lower in _OPENAI_HOSTS or _OPENAI_CHAT_PATH_RE.match(path_clean) or _OPENAI_RESPONSES_PATH_RE.match(path_clean):
+    if (
+        host_lower in _OPENAI_HOSTS
+        or _OPENAI_CHAT_PATH_RE.match(path_clean)
+        or _OPENAI_RESPONSES_PATH_RE.match(path_clean)
+    ):
         if "openai" in host_lower:
             return ("openai", "openai")
         return ("openai", _guess_provider(host_lower))

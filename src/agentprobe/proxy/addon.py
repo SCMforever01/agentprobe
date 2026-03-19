@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from mitmproxy import http
+from mitmproxy.websocket import WebSocketMessage
 
 from agentprobe.parser.detector import detect_agent, detect_protocol, is_sse_response
 from agentprobe.proxy.sse import SSEParser
@@ -27,20 +28,49 @@ class AgentProbeAddon:
         self._db = db
         self._hub = hub
         self._pending: dict[int, _FlowState] = {}
+        self._ws_flows: dict[int, CapturedRequest] = {}
 
     def request(self, flow: http.HTTPFlow) -> None:
         try:
             self._handle_request(flow)
         except Exception:
-            log.exception("addon request hook failed for %s %s", flow.request.method, flow.request.url)
+            log.exception(
+                "addon request hook failed for %s %s", flow.request.method, flow.request.url
+            )
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         try:
             if flow.response is None:
                 return
+            state = self._pending.get(id(flow))
+            if state:
+                state.captured.status_code = flow.response.status_code
+                state.captured.response_headers = dict(flow.response.headers)
+                state.ttfb_ms = (time.monotonic() - state.start_time) * 1000
+                _run_async(
+                    self._db.update_request(
+                        state.captured.id,
+                        {
+                            "status_code": state.captured.status_code,
+                            "response_headers": state.captured.response_headers,
+                            "ttfb_ms": state.ttfb_ms,
+                        },
+                    )
+                )
+                _run_async(
+                    self._hub.broadcast(
+                        {
+                            "type": "response_headers",
+                            "data": {
+                                "id": state.captured.id,
+                                "status_code": state.captured.status_code,
+                                "response_headers": state.captured.response_headers,
+                            },
+                        }
+                    )
+                )
             ct = flow.response.headers.get("content-type", "")
             if is_sse_response(ct):
-                state = self._pending.get(id(flow))
                 if state:
                     state.is_sse = True
                     state.sse_parser = SSEParser()
@@ -52,14 +82,50 @@ class AgentProbeAddon:
         try:
             self._handle_response(flow)
         except Exception:
-            log.exception("addon response hook failed for %s %s", flow.request.method, flow.request.url)
+            log.exception(
+                "addon response hook failed for %s %s", flow.request.method, flow.request.url
+            )
+
+    def error(self, flow: http.HTTPFlow) -> None:
+        state = self._pending.pop(id(flow), None)
+        self._ws_flows.pop(id(flow), None)
+        if state is not None and state.captured.status_code is None:
+            _run_async(
+                self._db.update_request(
+                    state.captured.id,
+                    {
+                        "status_code": 0,
+                        "duration_ms": (time.monotonic() - state.start_time) * 1000,
+                    },
+                )
+            )
+
+    def websocket_start(self, flow: http.HTTPFlow) -> None:
+        try:
+            self._handle_websocket_start(flow)
+        except Exception:
+            log.exception("addon websocket_start hook failed for %s", flow.request.url)
+
+    def websocket_message(self, flow: http.HTTPFlow) -> None:
+        try:
+            self._handle_websocket_message(flow)
+        except Exception:
+            log.exception("addon websocket_message hook failed for %s", flow.request.url)
+
+    def websocket_end(self, flow: http.HTTPFlow) -> None:
+        try:
+            self._handle_websocket_end(flow)
+        except Exception:
+            log.exception("addon websocket_end hook failed for %s", flow.request.url)
 
     def _handle_request(self, flow: http.HTTPFlow) -> None:
         headers = dict(flow.request.headers)
         body_text = _safe_get_text(flow.request)
         body_dict = _try_parse_json(body_text)
         agent = detect_agent(headers)
-        protocol_type, api_provider = detect_protocol(flow.request.host, flow.request.path, body_dict)
+        protocol_type, api_provider = detect_protocol(
+            flow.request.host, flow.request.path, body_dict
+        )
 
         captured = CapturedRequest(
             sequence=next(_seq),
@@ -80,10 +146,14 @@ class AgentProbeAddon:
         self._pending[id(flow)] = state
 
         _run_async(self._db.save_request(captured))
-        _run_async(self._hub.broadcast({
-            "type": "new_request",
-            "data": captured.to_summary().model_dump(mode="json"),
-        }))
+        _run_async(
+            self._hub.broadcast(
+                {
+                    "type": "new_request",
+                    "data": captured.to_summary().model_dump(mode="json"),
+                }
+            )
+        )
 
     def _handle_response(self, flow: http.HTTPFlow) -> None:
         state = self._pending.pop(id(flow), None)
@@ -107,7 +177,9 @@ class AgentProbeAddon:
                     state.sse_events.extend(remaining)
                 captured.sse_events = state.sse_events
                 captured.response_body = _format_sse_events(state.sse_events)
-                captured.response_size = len(captured.response_body.encode()) if captured.response_body else 0
+                captured.response_size = (
+                    len(captured.response_body.encode()) if captured.response_body else 0
+                )
             else:
                 resp_text = _safe_get_text(flow.response)
                 captured.response_body = resp_text
@@ -126,7 +198,6 @@ class AgentProbeAddon:
 
         _run_async(self._db.update_request(captured.id, update_fields))
 
-        # Save SSE events to separate sse_events table (batch)
         if captured.sse_events:
             sse_event_models = [
                 SSEEvent(
@@ -138,10 +209,101 @@ class AgentProbeAddon:
                 for idx, raw in enumerate(captured.sse_events)
             ]
             _run_async(self._db.save_sse_events(sse_event_models))
-        _run_async(self._hub.broadcast({
-            "type": "request_complete",
-            "data": captured.to_summary().model_dump(mode="json"),
-        }))
+        _run_async(
+            self._hub.broadcast(
+                {
+                    "type": "request_complete",
+                    "data": captured.to_summary().model_dump(mode="json"),
+                }
+            )
+        )
+
+    def _handle_websocket_start(self, flow: http.HTTPFlow) -> None:
+        headers = dict(flow.request.headers)
+        body_text = _safe_get_text(flow.request)
+        body_dict = _try_parse_json(body_text)
+        agent = detect_agent(headers)
+        protocol_type, api_provider = detect_protocol(
+            flow.request.host, flow.request.path, body_dict
+        )
+
+        captured = CapturedRequest(
+            sequence=next(_seq),
+            agent_type=agent,
+            method=flow.request.method,
+            url=flow.request.url,
+            host=flow.request.host,
+            path=flow.request.path,
+            request_headers=headers,
+            request_body=body_text,
+            request_size=len(body_text.encode()) if body_text else 0,
+            protocol_type=protocol_type,
+            api_provider=api_provider,
+            is_streaming=True,
+            status_code=101,
+            response_headers=dict(flow.response.headers) if flow.response else {},
+        )
+        self._ws_flows[id(flow)] = captured
+
+        _run_async(self._db.save_request(captured))
+        _run_async(
+            self._hub.broadcast(
+                {
+                    "type": "new_request",
+                    "data": captured.to_summary().model_dump(mode="json"),
+                }
+            )
+        )
+
+    def _handle_websocket_message(self, flow: http.HTTPFlow) -> None:
+        captured = self._ws_flows.get(id(flow))
+        if captured is None or flow.websocket is None:
+            return
+
+        msg: WebSocketMessage = flow.websocket.messages[-1]
+        if msg.from_client:
+            return
+
+        text = msg.content.decode("utf-8", errors="replace") if msg.content else ""
+        existing = captured.response_body or ""
+        captured.response_body = existing + text + "\n"
+        captured.response_size = len(captured.response_body.encode())
+
+        _run_async(
+            self._db.update_request(
+                captured.id,
+                {
+                    "response_body": captured.response_body,
+                    "response_size": captured.response_size,
+                },
+            )
+        )
+        _run_async(
+            self._hub.broadcast(
+                {
+                    "type": "ws_message",
+                    "data": {
+                        "id": captured.id,
+                        "from_client": msg.from_client,
+                        "content": text,
+                    },
+                }
+            )
+        )
+
+    def _handle_websocket_end(self, flow: http.HTTPFlow) -> None:
+        captured = self._ws_flows.pop(id(flow), None)
+        if captured is None:
+            return
+
+        _run_async(
+            self._hub.broadcast(
+                {
+                    "type": "request_complete",
+                    "data": captured.to_summary().model_dump(mode="json"),
+                }
+            )
+        )
 
     def _make_stream_callback(self, flow: http.HTTPFlow):
         def stream_callback(data: bytes) -> bytes:
@@ -154,6 +316,7 @@ class AgentProbeAddon:
                 events = state.sse_parser.feed(data)
                 state.sse_events.extend(events)
             return data
+
         return stream_callback
 
 

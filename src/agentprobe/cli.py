@@ -24,7 +24,10 @@ def cli() -> None:
 @click.option("--web-port", default=9091, type=int, show_default=True)
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--headless", is_flag=True, default=False)
-def start(proxy_port: int, web_port: int, host: str, headless: bool) -> None:
+@click.option("--transparent", is_flag=True, default=False, help="Enable transparent proxy mode")
+@click.option("--transparent-port", default=9092, type=int, show_default=True)
+def start(proxy_port: int, web_port: int, host: str, headless: bool,
+          transparent: bool, transparent_port: int) -> None:
     from agentprobe.api import create_app
     from agentprobe.api.websocket import WebSocketHub, hub
     from agentprobe.config import Config
@@ -43,6 +46,8 @@ def start(proxy_port: int, web_port: int, host: str, headless: bool) -> None:
         web_host="0.0.0.0",
         web_port=web_port,
         headless=headless,
+        transparent=transparent,
+        transparent_port=transparent_port,
     )
     db = Database()
     ws_hub: WebSocketHub = hub
@@ -53,6 +58,8 @@ def start(proxy_port: int, web_port: int, host: str, headless: bool) -> None:
 
     console.print(f"[bold green]AgentProbe v{__version__}[/]")
     console.print(f"  Proxy  → [cyan]http://{host}:{proxy_port}[/]")
+    if transparent:
+        console.print(f"  Transparent → [cyan]http://{host}:{transparent_port}[/]")
     console.print(f"  Web UI → [cyan]http://0.0.0.0:{web_port}[/]")
 
     async def _run() -> None:

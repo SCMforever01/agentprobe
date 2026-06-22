@@ -20,9 +20,13 @@ class ProxyLauncher:
         self._master: DumpMaster | None = None
 
     async def start(self) -> None:
+        mode = [f"regular@{self._config.proxy_port}"]
+        if self._config.transparent:
+            mode.append(f"transparent@{self._config.transparent_port}")
+
         opts = options.Options(
             listen_host=self._config.proxy_host,
-            listen_port=self._config.proxy_port,
+            mode=mode,
         )
         master = DumpMaster(
             opts,
@@ -32,10 +36,13 @@ class ProxyLauncher:
         master.addons.add(self._addon)
         self._master = master
         log.info(
-            "proxy listening on %s:%d",
+            "proxy listening: regular@%s:%d",
             self._config.proxy_host,
             self._config.proxy_port,
         )
+        if self._config.transparent:
+            log.info("proxy listening: transparent@%s:%d",
+                     self._config.proxy_host, self._config.transparent_port)
         await master.run()
 
     async def stop(self) -> None:

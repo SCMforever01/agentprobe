@@ -14,6 +14,8 @@ class Config:
     # Proxy settings
     proxy_host: str = "127.0.0.1"
     proxy_port: int = 9090
+    transparent: bool = False
+    transparent_port: int = 9092
 
     # Web UI settings
     web_host: str = "0.0.0.0"
